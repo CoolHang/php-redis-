@@ -1,9 +1,7 @@
 <?php  
 /**
  * Redis 操作，支持 Master/Slave 的负载集群
- *
- * @version        $Id: Ctrip.class.php 
- * @package        Xuan.Helpers
+ * redis操作工具类
  */
 
 
