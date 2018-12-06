@@ -1,0 +1,39 @@
+谈到缓存有几种形式，其中最简单的是在每个进程中开辟一块内存，存放缓存的信息，每次先从内存查… …  但是在一个分布式或者集群的环境中，
+getUser的接口可能会部署多套，每个进程的的内存是不能共享、相互独立的，这就悲剧了；还有一种使用一个第三方的缓存也叫公共缓存（比如redis、memcache等）；
+不论部署多少个包含getUser接口的服务，都去访问同一套缓存，那结果就不一样了。常规使用方法是先从redis判断获取的信息是否存在，
+不存在的情况下再去mysql查找数据，
+下面是一个简单的使示例：
+<?php
+class Test
+{
+    public $redis = null;
+
+    public function __construct()
+    {
+        $this->redis = new Redis();
+        $this->redis->connect('127.0.0.1',6379);
+        $this->redis->auth('');
+    }
+    //这里是个例子模型，按照自己的用法去套进去就行
+    //以文章为例子吧
+    //页面级，接口级都可以用
+    public function getData()
+    {
+        //判断缓存的键是否还存在
+        if(!$this->redis->exists("cache:".$commentid))
+        {
+            //缓存不存在
+            //下面的get_mysql_data（）函数只是个例子，按照自己具体情况去mysql获取数据
+            $data = $this->get_mysql_data();
+            $json = json_encode($data,JSON_UNESCAPED_UNICODE);
+            //存入redis
+            $this->redis->set("cache:".$commentid,$json);
+            //设置过期时间5分钟
+            $this->redis->expire("cache:".$commentid,60*60*5);
+        }
+
+        $json = $this->redis->get("cache:".$commentid);
+        $data = json_decode($json,true);
+        return $data;
+    }
+}
