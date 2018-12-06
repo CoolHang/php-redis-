@@ -1,0 +1,160 @@
+一、redis安装
+redis官网下载后是源码包，需要make安装。
+1、解压redis-3.2.5.tar.gz
+2、cd redis-3.2.5
+3、make
+4、cd src/
+5、make install
+安装完成，src包下面新增redis-server、redis-cli等这些可执行脚本，表示安装完成。 
+
+二、启动实例集群配置
+搭建Redis Cluster，建立6个redis实例，3主3从，端口号分别为7000-7005
+创建以6个端口命名的子目录，之后我们将在6个子目录上都开启Redis实例
+cd redis-3.2.5
+mkdir cluster-test
+cd cluster-test
+mkdir 7000 7001 7002 7003 7004 7005
+
+Redis实例配置
+在7000到7005每一个目录中都创建redis.conf文件，配置项如下：
+cd redis-3.2.5
+mkdir cluster-test
+cd cluster-test
+mkdir 7000 7001 7002 7003 7004 7005
+
+配置项redis.conf                  示例                           备注
+port                           	7000                           	端口号
+cluster-enabled                 yes                   yes，表示支持Redis Clusterno,单实例
+cluster-config-file             nodes-7000.conf       Redis Cluster记录的启动信息文件，文件由cluster自动生成，不需要用户编辑
+cluster-node-timeout            5000                   	毫秒单位，失效时间
+appendonly                      yes                   支持appendonly持久化方式
+protected-mode                  no                    默认是打开的，此处关闭。因为jedis访问时，如果是保护模式，影响访问
+bind                            192.168.2.54          机器IP，此处最好写IP，不要写localhost或127.0.0.1，可能影响jedis客户端访问
+
+Redis实例启动
+
+将第一步安装生成的redis-server拷贝到cluster-test目录，分别后台启动6个redis实例
+nohup ./redis-server 7000/redis.conf &
+nohup ./redis-server 7001/redis.conf &
+nohup ./redis-server 7002/redis.conf &
+nohup ./redis-server 7003/redis.conf &
+nohup ./redis-server 7004/redis.conf &
+nohup ./redis-server 7005/redis.conf &
+
+启动完后，cluster-test目录下生成了nodes-7000.conf等启动文件信息。
+查看进程启动成功：[root@centos2 cluster-test]# ps -ef|grep redis
+
+三、创建集群
+6个redis实例已经创建，它们目前是相互独立的，没有关联。接下来是创建Redis Cluster集群，将6个实例组成一个集群。
+redis-trib命令创建集群
+src目录下make生成的redis-trib命令，可用于Redis Cluster集群创建的一些脚本启动，它是一个ruby程序。因此我们需要配置ruby环境
+安装ruby
+yum install ruby
+yum install ruby-irb
+
+安装Gem
+Gem是一个管理Ruby库和程序的标准包，它通过RubyGem（如 http://rubygems.org/ ）源来查找、安装、升级和卸载软件包，非常的便捷。
+配置了ruby环境后，还需要安装redis整个包才能够运行redis-trib。安装过程中，需要先安装gem库，不然会出现gem command not found错误。
+[root@centos2 src]# gem install redis
+-bash: gem: command not found
+安装gem过程中，可能出现以下问题
+yum install rubygems
+ERROR: Could not find a valid gem 'redis' (>= 0) in any repository
+
+问题原因：无法连接gem服务器，原因是该gem服务器被墙了。按如下步骤手动下载安装。
+wget https://rubygems.global.ssl.fastly.net/gems/redis-3.2.1.gem
+gem install -l ./redis-3.2.1.gem
+安装完后，src包下就会生成redis-trib.rb文件
+启动命令
+
+./redis-trib.rb create --replicas 1 192.168.121.130:7000 192.168.121.130:7001 192.168.121.130:7002 192.168.121.130:7003 192.168.121.130:7004 192.168.121.130:7005
+启动后，各Redis实例之间分别会新增一个端口用于通信，通信端口是Redis实例端口+1W，分别为17000，17001，17002，17003，17004，17005
+命令的解释如下：
+1、给定的命令将会被ruby程序翻译为create，这表示我们想要创建一个新的集群。
+2、选项--replicas 1意思是为每一个master节点创建一个slave节点。
+3、其他参数表示redis实例的地址及端口，以空格为间隔。
+启动日志分析
+出现[OK] All 16384 slots covered.表示启动成功。从启动日志可以看出，master是7000,7001,7002，对应的slave是7003,7004,7005
+集群启动状态检测
+我们可以通过./redis-trib.rb check 192.168.121.130:7000来检测Redis Cluster的启动状态。
+登录集群
+通过命令./redis-cli -c -h 192.168.121.129 -p 7000用来登录
+重定向
+从以下命令可以看出，我们登录的是192.168.121.130机器的7000端口Redis实例，set foo 123，foo经过hash后落到了12182槽，12182槽存储在192.168.121.130机器的7002端口实例，因此日志显示重定向到7002端口的实例。
+复制代码
+[root@centos2 src]# ./redis-cli -c -h 192.168.121.130 -p 7000
+192.168.121.130:7000> set foo 123
+-> Redirected to slot [12182] located at 192.168.121.130:7002
+OK
+192.168.121.130:7002> get foo
+"123"
+四、创建集群-通过create-cluster脚本
+
+通过redis-trib.rb命令创建集群涉及命令较多，稍显复杂。好在redis提供了create-cluster脚本utils/create-cluster/create-cluster来创建集群，方便很多。
+
+ 
+
+create-cluster命令介绍
+
+从create-cluster源码看，其实现原理也是利用了redis-trib.rb命令。该脚本默认创建3个master节点，3个salve节点。
+
+1、create-cluster start
+
+创建6个redis实例，默认端口号是30001-30006，如果想改端口号,在create-cluster里面更改PORT值即可。
+
+如果想要端口号是7000-7005，设置PORT=6999即可
+
+2、create-cluster create
+
+创建集群，3个master,3个slave
+
+3、create-cluster stop
+
+关闭Redis Cluster集群和Redis实例
+
+4、create-cluster clean
+
+清除所在Redis实例的data, logs, config文件
+
+ 
+
+使用方法
+
+cd /home/redis-3.2/utils/create-cluster --进入目录
+
+./create-cluster clean ---先清除Redis实例的文件
+
+./create-cluster start ---启动Redis实例
+
+./create-cluster create ---创建Redis Cluster集群
+
+ 
+
+启动完后，使用redis-cli命令登录，即可正常访问。
+复制代码
+
+[root@centos1 create-cluster]# redis-cli -c -p 7000
+
+127.0.0.1:7000> set foo hello
+
+-> Redirected to slot [12182] located at 127.0.0.1:7002
+
+OK
+
+127.0.0.1:7002> set hello world
+
+-> Redirected to slot [866] located at 127.0.0.1:7000
+
+OK
+
+127.0.0.1:7000> get foo
+
+-> Redirected to slot [12182] located at 127.0.0.1:7002
+
+"hello"
+
+127.0.0.1:7002> get hello
+
+-> Redirected to slot [866] located at 127.0.0.1:7000
+
+"world"
